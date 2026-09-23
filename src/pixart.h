@@ -11,6 +11,9 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/sensor.h>
 
+#include <pmw3610/pointer_acceleration.h>
+#include "pmw3610_logic.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -18,10 +21,16 @@ extern "C" {
 /* device data structure */
 struct pixart_data {
     const struct device          *dev;
+    struct pmw3610_report_accumulator report;
+    struct pmw3610_pointer_accel_state acceleration;
+    struct pmw3610_output_state output;
     bool                         sw_smart_flag; // for pmw3610 smart algorithm
 
     struct gpio_callback         irq_gpio_cb; // motion pin irq callback
     struct k_work                trigger_work; // realtrigger job
+#if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
+    struct k_work_delayable      report_work; // lossless rate-limited report job
+#endif
 
     struct k_work_delayable      init_work; // the work structure for delayable init steps
     int                          async_init_step;
@@ -43,6 +52,10 @@ struct pixart_config {
     uint8_t y_input_code;
     bool force_awake;
     bool force_awake_4ms_mode;
+    bool acceleration_enabled;
+    uint8_t acceleration_scroll_layer;
+    uint8_t acceleration_gesture_layer;
+    struct pmw3610_pointer_accel_curve acceleration_curve;
 };
 
 #ifdef __cplusplus

@@ -424,7 +424,6 @@ static void pmw3610_async_init(struct k_work *work) {
 
 static int pmw3610_report_data(const struct device *dev) {
     struct pixart_data *data = dev->data;
-    const struct pixart_config *config = dev->config;
     uint8_t buf[PMW3610_BURST_SIZE];
 
     if (unlikely(!data->ready)) {
@@ -432,27 +431,16 @@ static int pmw3610_report_data(const struct device *dev) {
         return -EBUSY;
     }
 
-    static int64_t dx = 0;
-    static int64_t dy = 0;
-
-#if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
-    static int64_t last_smp_time = 0;
-    static int64_t last_rpt_time = 0;
-    int64_t now = k_uptime_get();
-#endif
-
 	int err = pmw3610_read(dev, PMW3610_REG_MOTION_BURST, buf, PMW3610_BURST_SIZE);
     if (err) {
         return err;
     }
     // LOG_HEXDUMP_DBG(buf, PMW3610_BURST_SIZE, "buf");
 
-// 12-bit two's complement value to int16_t
-// adapted from https://stackoverflow.com/questions/70802306/convert-a-12-bit-signed-number-in-c
-#define TOINT16(val, bits) (((struct { int16_t value : bits; }){val}).value)
-
-    int16_t x = TOINT16((buf[PMW3610_X_L_POS] + ((buf[PMW3610_XY_H_POS] & 0xF0) << 4)), 12);
-    int16_t y = TOINT16((buf[PMW3610_Y_L_POS] + ((buf[PMW3610_XY_H_POS] & 0x0F) << 8)), 12);
+    int16_t x = pmw3610_decode_delta12(buf[PMW3610_X_L_POS],
+                                      buf[PMW3610_XY_H_POS] >> 4);
+    int16_t y = pmw3610_decode_delta12(buf[PMW3610_Y_L_POS],
+                                      buf[PMW3610_XY_H_POS]);
     LOG_DBG("x/y: %d/%d", x, y);
 
 #ifdef CONFIG_PMW3610_SMART_ALGORITHM
@@ -469,47 +457,156 @@ static int pmw3610_report_data(const struct device *dev) {
 #endif
 
 #if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
-    // purge accumulated delta, if last sampled had not been reported on last report tick
-    if (now - last_smp_time >= CONFIG_PMW3610_REPORT_INTERVAL_MIN) {
-        dx = 0;
-        dy = 0;
-    }
-    last_smp_time = now;
-#endif
+    const int64_t now_ms = k_uptime_get();
+    pmw3610_report_accumulate(&data->report, now_ms, x, y);
 
-    // accumulate delta until report in next iteration
-    dx += x;
-    dy += y;
-
-#if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
-    // strict to report inerval
-    if (now - last_rpt_time < CONFIG_PMW3610_REPORT_INTERVAL_MIN) {
-        return 0;
-    }
-#endif
-
-    // fetch report value
-    int16_t rx = (int16_t)CLAMP(dx, INT16_MIN, INT16_MAX);
-    int16_t ry = (int16_t)CLAMP(dy, INT16_MIN, INT16_MAX);
-    bool have_x = rx != 0;
-    bool have_y = ry != 0;
-
-    if (have_x || have_y) {
-#if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
-        last_rpt_time = now;
-#endif
-        dx = 0;
-        dy = 0;
-        if (have_x) {
-            input_report(dev, config->evt_type, config->x_input_code, rx, !have_y, K_NO_WAIT);
-        }
-        if (have_y) {
-            input_report(dev, config->evt_type, config->y_input_code, ry, true, K_NO_WAIT);
+    int64_t delay_ms;
+    if (pmw3610_report_prepare_schedule(&data->report, now_ms,
+                                        CONFIG_PMW3610_REPORT_INTERVAL_MIN, &delay_ms)) {
+        int schedule_err = k_work_reschedule(&data->report_work, K_MSEC(delay_ms));
+        if (schedule_err < 0) {
+            data->report.report_scheduled = false;
+            LOG_ERR("Failed to schedule PMW3610 report: %d", schedule_err);
+            return schedule_err;
         }
     }
+#else
+    const struct pixart_config *config = dev->config;
+    int32_t output_x = x;
+    int32_t output_y = y;
+    const int64_t now_ms = k_uptime_get();
+
+    if (IS_ENABLED(CONFIG_PMW3610_POINTER_ACCELERATION) && config->acceleration_enabled &&
+        !zmk_keymap_layer_active(config->acceleration_scroll_layer) &&
+        !zmk_keymap_layer_active(config->acceleration_gesture_layer)) {
+        pmw3610_pointer_accel_apply_frame(&config->acceleration_curve, &data->acceleration,
+                                          x, y, now_ms,
+                                          config->acceleration_curve.reference_interval_ms,
+                                          &output_x, &output_y);
+    } else {
+        pmw3610_pointer_accel_reset(&data->acceleration);
+    }
+
+    bool have_x = output_x != 0;
+    bool have_y = output_y != 0;
+    if (have_x) {
+        input_report(dev, config->evt_type, config->x_input_code, output_x, !have_y, K_NO_WAIT);
+    }
+    if (have_y) {
+        input_report(dev, config->evt_type, config->y_input_code, output_y, true, K_NO_WAIT);
+    }
+#endif
 
     return err;
 }
+
+#if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
+static bool pmw3610_acceleration_bypassed(const struct pixart_config *config) {
+#if IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
+    return zmk_keymap_layer_active(config->acceleration_scroll_layer) ||
+           zmk_keymap_layer_active(config->acceleration_gesture_layer);
+#else
+    ARG_UNUSED(config);
+    return true;
+#endif
+}
+
+static struct pmw3610_frame_retry pmw3610_send_frame(const struct device *dev, int16_t x,
+                                                      int16_t y, bool force_sync,
+                                                      int *x_err, int *y_err) {
+    const struct pixart_config *config = dev->config;
+    const bool have_x = x != 0;
+    const bool have_y = y != 0;
+    *x_err = 0;
+    *y_err = 0;
+
+    if (!have_x && !have_y && force_sync) {
+        *x_err = input_report(dev, config->evt_type, config->x_input_code, 0, true, K_NO_WAIT);
+        return (struct pmw3610_frame_retry){0};
+    }
+
+    if (have_x) {
+        *x_err = input_report(dev, config->evt_type, config->x_input_code, x, !have_y, K_NO_WAIT);
+    }
+
+    struct pmw3610_frame_retry retry = pmw3610_frame_retry_result(x, y, *x_err, 0);
+    if (retry.send_y) {
+        *y_err = input_report(dev, config->evt_type, config->y_input_code, y, true, K_NO_WAIT);
+        retry = pmw3610_frame_retry_result(x, y, *x_err, *y_err);
+    }
+
+    return retry;
+}
+
+static void pmw3610_report_work_callback(struct k_work *work) {
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    struct pixart_data *data = CONTAINER_OF(dwork, struct pixart_data, report_work);
+    const struct device *dev = data->dev;
+    const struct pixart_config *config = dev->config;
+    const int64_t now_ms = k_uptime_get();
+    const bool draining_pending = pmw3610_output_has_pending(&data->output);
+
+    data->report.report_scheduled = false;
+
+    if (!draining_pending) {
+        int16_t raw_x;
+        int16_t raw_y;
+        int64_t collection_elapsed_ms;
+        if (!pmw3610_report_take(&data->report, now_ms, &raw_x, &raw_y,
+                                  &collection_elapsed_ms)) {
+            return;
+        }
+
+        int32_t output_x = raw_x;
+        int32_t output_y = raw_y;
+        if (IS_ENABLED(CONFIG_PMW3610_POINTER_ACCELERATION) && config->acceleration_enabled &&
+            !pmw3610_acceleration_bypassed(config)) {
+            pmw3610_pointer_accel_apply_frame(&config->acceleration_curve, &data->acceleration,
+                                              raw_x, raw_y, now_ms, collection_elapsed_ms,
+                                              &output_x, &output_y);
+        } else {
+            pmw3610_pointer_accel_reset(&data->acceleration);
+        }
+        pmw3610_output_queue(&data->output, output_x, output_y,
+                             raw_x != 0 || raw_y != 0);
+    }
+
+    const struct pmw3610_output_frame frame = pmw3610_output_take_next(&data->output);
+    int x_err = 0;
+    int y_err = 0;
+    struct pmw3610_frame_retry retry =
+        pmw3610_send_frame(dev, frame.x, frame.y, frame.force_sync, &x_err, &y_err);
+    const bool zero_sync_failed =
+        frame.force_sync && frame.x == 0 && frame.y == 0 && x_err < 0;
+    pmw3610_output_complete(&data->output, retry, zero_sync_failed);
+
+    const bool have_pending = pmw3610_output_has_pending(&data->output);
+    if (retry.x != 0 || retry.y != 0 || zero_sync_failed) {
+        LOG_WRN("PMW3610 input report failed; retaining delta (%d, %d)", x_err, y_err);
+    }
+    if (draining_pending && !have_pending) {
+        data->report.last_report_time = now_ms;
+        data->report.have_last_report = true;
+    }
+
+    int64_t delay_ms = CONFIG_PMW3610_REPORT_INTERVAL_MIN;
+    bool schedule = have_pending;
+    if (schedule) {
+        data->report.report_scheduled = true;
+    } else {
+        schedule = pmw3610_report_prepare_schedule(&data->report, now_ms,
+                                                   CONFIG_PMW3610_REPORT_INTERVAL_MIN,
+                                                   &delay_ms);
+    }
+    if (schedule) {
+        int schedule_err = k_work_reschedule(&data->report_work, K_MSEC(delay_ms));
+        if (schedule_err < 0) {
+            data->report.report_scheduled = false;
+            LOG_ERR("Failed to reschedule PMW3610 report: %d", schedule_err);
+        }
+    }
+}
+#endif
 
 static void pmw3610_gpio_callback(const struct device *gpiob, struct gpio_callback *cb,
                                   uint32_t pins) {
@@ -567,12 +664,18 @@ static int pmw3610_init(const struct device *dev) {
 
     // init device pointer
     data->dev = dev;
+    pmw3610_report_accumulator_init(&data->report);
+    pmw3610_pointer_accel_reset(&data->acceleration);
+    pmw3610_output_init(&data->output);
 
     // init smart algorithm flag;
     data->sw_smart_flag = false;
 
     // init trigger handler work
     k_work_init(&data->trigger_work, pmw3610_work_callback);
+#if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
+    k_work_init_delayable(&data->report_work, pmw3610_report_work_callback);
+#endif
 
     // init irq routine
     err = pmw3610_init_irq(dev);
@@ -667,6 +770,29 @@ static const struct sensor_driver_api pmw3610_driver_api = {
                         SPI_MODE_CPHA | SPI_TRANSFER_MSB)
 
 #define PMW3610_DEFINE(n)                                                                          \
+    BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), pointer_acceleration_base_gain_milli) >= 500,             \
+                 "Pointer acceleration base gain must be at least 0.5x");                         \
+    BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), pointer_acceleration_base_gain_milli) <= 1000,            \
+                 "Pointer acceleration base gain must not exceed 1.0x");                          \
+    BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), pointer_acceleration_full_speed) >                        \
+                     DT_PROP(DT_DRV_INST(n), pointer_acceleration_takeoff_speed),                  \
+                 "Pointer acceleration full speed must exceed takeoff speed");                   \
+    BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), pointer_acceleration_max_gain_milli) >=                   \
+                     DT_PROP(DT_DRV_INST(n), pointer_acceleration_base_gain_milli),                \
+                 "Pointer acceleration maximum gain must exceed the base gain");                 \
+    BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), pointer_acceleration_max_gain_milli) <= 4000,             \
+                 "Pointer acceleration maximum gain must not exceed 4.0x");                      \
+    BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), pointer_acceleration_reference_interval_ms) > 0,         \
+                 "Pointer acceleration reference interval must be positive");                   \
+    BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), pointer_acceleration_idle_reset_ms) >                    \
+                     DT_PROP(DT_DRV_INST(n), pointer_acceleration_reference_interval_ms),          \
+                 "Pointer acceleration idle reset must exceed the reference interval");          \
+    BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), pointer_acceleration_scroll_layer) <                    \
+                     ZMK_KEYMAP_LAYERS_LEN,                                                       \
+                 "Pointer acceleration Scroll layer must exist");                               \
+    BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), pointer_acceleration_gesture_layer) <                   \
+                     ZMK_KEYMAP_LAYERS_LEN,                                                       \
+                 "Pointer acceleration Gesture layer must exist");                              \
     static struct pixart_data data##n;                                                             \
     static const struct pixart_config config##n = {                                                \
 		.spi = SPI_DT_SPEC_INST_GET(n, PMW3610_SPI_MODE, 0),		                               \
@@ -680,6 +806,26 @@ static const struct sensor_driver_api pmw3610_driver_api = {
         .y_input_code = DT_PROP(DT_DRV_INST(n), y_input_code),                                     \
         .force_awake = DT_PROP(DT_DRV_INST(n), force_awake),                                       \
         .force_awake_4ms_mode = DT_PROP(DT_DRV_INST(n), force_awake_4ms_mode),                     \
+        .acceleration_enabled = DT_PROP(DT_DRV_INST(n), pointer_acceleration),                     \
+        .acceleration_scroll_layer =                                                              \
+            DT_PROP(DT_DRV_INST(n), pointer_acceleration_scroll_layer),                            \
+        .acceleration_gesture_layer =                                                             \
+            DT_PROP(DT_DRV_INST(n), pointer_acceleration_gesture_layer),                           \
+        .acceleration_curve =                                                                     \
+            {                                                                                      \
+                .base_gain_milli =                                                                \
+                    DT_PROP(DT_DRV_INST(n), pointer_acceleration_base_gain_milli),                 \
+                .takeoff_speed =                                                                  \
+                    DT_PROP(DT_DRV_INST(n), pointer_acceleration_takeoff_speed),                   \
+                .full_speed =                                                                     \
+                    DT_PROP(DT_DRV_INST(n), pointer_acceleration_full_speed),                      \
+                .max_gain_milli =                                                                 \
+                    DT_PROP(DT_DRV_INST(n), pointer_acceleration_max_gain_milli),                  \
+                .reference_interval_ms =                                                          \
+                    DT_PROP(DT_DRV_INST(n), pointer_acceleration_reference_interval_ms),           \
+                .idle_reset_ms =                                                                  \
+                    DT_PROP(DT_DRV_INST(n), pointer_acceleration_idle_reset_ms),                   \
+            },                                                                                     \
     };                                                                                             \
     DEVICE_DT_INST_DEFINE(n, pmw3610_init, NULL, &data##n, &config##n, POST_KERNEL,                \
                           CONFIG_INPUT_PMW3610_INIT_PRIORITY, &pmw3610_driver_api);

@@ -32,3 +32,38 @@ properties:
     type: boolean
   force-awake-4ms-mode:
     type: boolean
+  pointer-acceleration:
+    type: boolean
+    description: Enable same-frame pointer acceleration for this sensor instance
+  pointer-acceleration-base-gain-milli:
+    type: int
+    default: 1000
+    description: Low-speed gain in thousandths
+  pointer-acceleration-takeoff-speed:
+    type: int
+    default: 16
+    description: Normalized vector speed where the gain ramp starts
+  pointer-acceleration-full-speed:
+    type: int
+    default: 80
+    description: Normalized vector speed where the output-speed slope reaches maximum gain
+  pointer-acceleration-max-gain-milli:
+    type: int
+    default: 2000
+    description: Maximum output-speed slope and asymptotic multiplier in thousandths
+  pointer-acceleration-reference-interval-ms:
+    type: int
+    default: 8
+    description: Sensor report interval used to normalize delayed frames
+  pointer-acceleration-idle-reset-ms:
+    type: int
+    default: 60
+    description: Idle time that clears fractional remainder state
+  pointer-acceleration-scroll-layer:
+    type: int
+    default: 2
+    description: Layer on which acceleration is bypassed for raw scrolling
+  pointer-acceleration-gesture-layer:
+    type: int
+    default: 3
+    description: Layer on which acceleration is bypassed for raw gestures
