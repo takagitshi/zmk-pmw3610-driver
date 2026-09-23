@@ -17,7 +17,7 @@ if PMW3610
 
 config PMW3610_POINTER_ACCELERATION
   bool "PMW3610 pointer acceleration"
-  default y
+  default n
   help
     Apply an optional same-frame gain curve in the PMW3610 report path.
     The feature remains inactive unless enabled on a sensor devicetree node.

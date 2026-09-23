@@ -787,11 +787,13 @@ static const struct sensor_driver_api pmw3610_driver_api = {
     BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), pointer_acceleration_idle_reset_ms) >                    \
                      DT_PROP(DT_DRV_INST(n), pointer_acceleration_reference_interval_ms),          \
                  "Pointer acceleration idle reset must exceed the reference interval");          \
-    BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), pointer_acceleration_scroll_layer) <                    \
-                     ZMK_KEYMAP_LAYERS_LEN,                                                       \
+    BUILD_ASSERT(!DT_PROP(DT_DRV_INST(n), pointer_acceleration) ||                                \
+                     DT_PROP(DT_DRV_INST(n), pointer_acceleration_scroll_layer) <                  \
+                         ZMK_KEYMAP_LAYERS_LEN,                                                    \
                  "Pointer acceleration Scroll layer must exist");                               \
-    BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), pointer_acceleration_gesture_layer) <                   \
-                     ZMK_KEYMAP_LAYERS_LEN,                                                       \
+    BUILD_ASSERT(!DT_PROP(DT_DRV_INST(n), pointer_acceleration) ||                                \
+                     DT_PROP(DT_DRV_INST(n), pointer_acceleration_gesture_layer) <                 \
+                         ZMK_KEYMAP_LAYERS_LEN,                                                    \
                  "Pointer acceleration Gesture layer must exist");                              \
     static struct pixart_data data##n;                                                             \
     static const struct pixart_config config##n = {                                                \

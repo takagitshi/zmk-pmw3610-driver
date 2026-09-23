@@ -44,6 +44,40 @@ static void test_overflow_chunk_and_retry_order(void) {
     assert(!pmw3610_output_has_pending(&state));
 }
 
+static void test_repeated_failure_and_zero_sync_retry(void) {
+    struct pmw3610_output_state state;
+    pmw3610_output_init(&state);
+    pmw3610_output_queue(&state, 10, 20, true);
+
+    struct pmw3610_output_frame frame = pmw3610_output_take_next(&state);
+    pmw3610_output_complete(&state,
+                            pmw3610_frame_retry_result(frame.x, frame.y, -1, 0), false);
+    frame = pmw3610_output_take_next(&state);
+    assert(frame.retrying && frame.x == 10 && frame.y == 20);
+    pmw3610_output_complete(&state,
+                            pmw3610_frame_retry_result(frame.x, frame.y, -1, 0), false);
+    frame = pmw3610_output_take_next(&state);
+    assert(frame.retrying && frame.x == 10 && frame.y == 20);
+    pmw3610_output_complete(&state,
+                            pmw3610_frame_retry_result(frame.x, frame.y, 0, 0), false);
+    assert(!pmw3610_output_has_pending(&state));
+
+    pmw3610_output_queue(&state, 0, 0, true);
+    frame = pmw3610_output_take_next(&state);
+    assert(frame.force_sync && frame.x == 0 && frame.y == 0);
+    pmw3610_output_complete(&state, (struct pmw3610_frame_retry){0}, true);
+    frame = pmw3610_output_take_next(&state);
+    assert(frame.retrying && frame.force_sync && frame.x == 0 && frame.y == 0);
+    pmw3610_output_complete(&state, (struct pmw3610_frame_retry){0}, false);
+    assert(!pmw3610_output_has_pending(&state));
+}
+
+static void test_negative_overflow_chunk(void) {
+    const struct pmw3610_frame_chunk chunk =
+        pmw3610_frame_chunk_from_pending(-49150, -24575);
+    assert(chunk.x == -32767 && chunk.y == -16383);
+}
+
 static void test_fixed_deadline_and_tail_flush(void) {
     struct pmw3610_report_accumulator state;
     int64_t delay;
@@ -76,6 +110,8 @@ int main(void) {
     test_delta12_boundaries();
     test_retry_semantics();
     test_overflow_chunk_and_retry_order();
+    test_repeated_failure_and_zero_sync_retry();
+    test_negative_overflow_chunk();
     test_fixed_deadline_and_tail_flush();
     puts("pmw3610_logic_test: PASS");
     return 0;
