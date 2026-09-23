@@ -30,6 +30,11 @@ struct pmw3610_frame_chunk {
     int16_t y;
 };
 
+struct pmw3610_motion_delta {
+    int16_t x;
+    int16_t y;
+};
+
 struct pmw3610_output_state {
     int32_t pending_x;
     int32_t pending_y;
@@ -51,6 +56,14 @@ static inline int16_t pmw3610_decode_delta12(uint8_t low, uint8_t high_nibble) {
     uint16_t raw = (uint16_t)low | (((uint16_t)high_nibble & 0x0fU) << 8);
 
     return (raw & 0x0800U) != 0U ? (int16_t)(raw - 0x1000U) : (int16_t)raw;
+}
+
+static inline struct pmw3610_motion_delta
+pmw3610_decode_motion_delta(uint8_t x_low, uint8_t y_low, uint8_t xy_high) {
+    return (struct pmw3610_motion_delta){
+        .x = pmw3610_decode_delta12(x_low, xy_high >> 4),
+        .y = pmw3610_decode_delta12(y_low, xy_high),
+    };
 }
 
 static inline struct pmw3610_frame_chunk pmw3610_frame_chunk_from_pending(int32_t x,

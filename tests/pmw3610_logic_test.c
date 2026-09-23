@@ -13,6 +13,17 @@ static void test_delta12_boundaries(void) {
     assert(pmw3610_decode_delta12(0xff, 0xf) == -1);
 }
 
+static void test_packed_motion_nibble_mapping_and_sign(void) {
+    struct pmw3610_motion_delta delta =
+        pmw3610_decode_motion_delta(0x23, 0xdd, 0x1e);
+    assert(delta.x == 0x123);
+    assert(delta.y == -0x123);
+
+    delta = pmw3610_decode_motion_delta(0xdd, 0x23, 0xe1);
+    assert(delta.x == -0x123);
+    assert(delta.y == 0x123);
+}
+
 static void test_retry_semantics(void) {
     struct pmw3610_frame_retry retry = pmw3610_frame_retry_result(10, 20, -1, 0);
     assert(!retry.send_y && retry.x == 10 && retry.y == 20);
@@ -108,6 +119,7 @@ static void test_fixed_deadline_and_tail_flush(void) {
 
 int main(void) {
     test_delta12_boundaries();
+    test_packed_motion_nibble_mapping_and_sign();
     test_retry_semantics();
     test_overflow_chunk_and_retry_order();
     test_repeated_failure_and_zero_sync_retry();

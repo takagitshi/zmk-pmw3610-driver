@@ -63,11 +63,46 @@ static void test_delayed_backlog_is_not_classed_as_fast(void) {
     assert(x < 320);
 }
 
+static void test_all_quadrants_preserve_sign(void) {
+    static const int16_t inputs[][2] = {
+        {60, 80},
+        {-60, 80},
+        {-60, -80},
+        {60, -80},
+    };
+
+    for (size_t i = 0; i < sizeof(inputs) / sizeof(inputs[0]); i++) {
+        struct pmw3610_pointer_accel_state state;
+        int32_t x;
+        int32_t y;
+
+        pmw3610_pointer_accel_reset(&state);
+        pmw3610_pointer_accel_apply_frame(&curve, &state, inputs[i][0], inputs[i][1],
+                                          1000, 15, &x, &y);
+        assert((x > 0) == (inputs[i][0] > 0));
+        assert((y > 0) == (inputs[i][1] > 0));
+    }
+}
+
+static void test_direction_change_drops_opposite_remainder(void) {
+    struct pmw3610_pointer_accel_state state;
+    int32_t x;
+    int32_t y;
+
+    pmw3610_pointer_accel_reset(&state);
+    pmw3610_pointer_accel_apply_frame(&curve, &state, 1, 0, 1000, 15, &x, &y);
+    assert(x == 0 && y == 0);
+    pmw3610_pointer_accel_apply_frame(&curve, &state, -2, 0, 1015, 15, &x, &y);
+    assert(x == -1 && y == 0);
+}
+
 int main(void) {
     test_vector_and_time_normalization();
     test_curve_is_monotonic_and_bounded();
     test_fractional_motion_and_same_frame_direction();
     test_delayed_backlog_is_not_classed_as_fast();
+    test_all_quadrants_preserve_sign();
+    test_direction_change_drops_opposite_remainder();
     puts("pointer_acceleration_test: PASS");
     return 0;
 }

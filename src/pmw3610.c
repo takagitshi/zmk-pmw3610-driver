@@ -437,10 +437,11 @@ static int pmw3610_report_data(const struct device *dev) {
     }
     // LOG_HEXDUMP_DBG(buf, PMW3610_BURST_SIZE, "buf");
 
-    int16_t x = pmw3610_decode_delta12(buf[PMW3610_X_L_POS],
-                                      buf[PMW3610_XY_H_POS] >> 4);
-    int16_t y = pmw3610_decode_delta12(buf[PMW3610_Y_L_POS],
-                                      buf[PMW3610_XY_H_POS]);
+    const struct pmw3610_motion_delta delta =
+        pmw3610_decode_motion_delta(buf[PMW3610_X_L_POS], buf[PMW3610_Y_L_POS],
+                                    buf[PMW3610_XY_H_POS]);
+    int16_t x = delta.x;
+    int16_t y = delta.y;
     LOG_DBG("x/y: %d/%d", x, y);
 
 #ifdef CONFIG_PMW3610_SMART_ALGORITHM
