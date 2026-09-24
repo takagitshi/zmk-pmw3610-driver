@@ -2,6 +2,19 @@
 
 This work is based on [ufan's zmk pixart sensor drivers](https://github.com/ufan/zmk/tree/support-trackpad), [inorichi's zmk-pmw3610-driver](https://github.com/inorichi/zmk-pmw3610-driver), and [Zephyr PMW3610 driver](https://github.com/zephyrproject-rtos/zephyr/blob/main/drivers/input/input_pmw3610.c).
 
+## Optional lossless pointer acceleration
+
+This fork adds an opt-in, device-tree configured pointer acceleration path for
+ZMK v0.3. When `CONFIG_PMW3610_REPORT_INTERVAL_MIN` is non-zero, motion is
+flushed by delayed work at the configured boundary, including the final sample.
+Large accelerated frames are split without changing their X/Y direction, and
+failed non-blocking input reports retain their unsent distance for retry.
+
+Acceleration is disabled unless the sensor node contains
+`pointer-acceleration;`. Scroll and Gesture layer IDs are configurable bypasses,
+so those modes continue to receive raw motion. `force-awake` remains independent
+and is not enabled by this feature.
+
 This driver had been tested on [my PMW3610 breakout board](https://github.com/badjeff/pmw3610-pcb).
 
 #### What is different to [inorichi's driver](https://github.com/inorichi/zmk-pmw3610-driver)
