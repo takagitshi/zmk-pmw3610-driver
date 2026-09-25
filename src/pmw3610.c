@@ -788,6 +788,17 @@ static const struct sensor_driver_api pmw3610_driver_api = {
     BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), pointer_acceleration_idle_reset_ms) >                    \
                      DT_PROP(DT_DRV_INST(n), pointer_acceleration_reference_interval_ms),          \
                  "Pointer acceleration idle reset must exceed the reference interval");          \
+    BUILD_ASSERT(!DT_PROP(DT_DRV_INST(n), pointer_acceleration_precision_mode) ||                 \
+                     DT_PROP(DT_DRV_INST(n), pointer_acceleration_precision_gain_milli) >= 100,   \
+                 "Pointer acceleration precision gain must be at least 0.1x");                  \
+    BUILD_ASSERT(!DT_PROP(DT_DRV_INST(n), pointer_acceleration_precision_mode) ||                 \
+                     DT_PROP(DT_DRV_INST(n), pointer_acceleration_precision_gain_milli) <=        \
+                         DT_PROP(DT_DRV_INST(n), pointer_acceleration_base_gain_milli),            \
+                 "Pointer acceleration precision gain must not exceed the base gain");          \
+    BUILD_ASSERT(!DT_PROP(DT_DRV_INST(n), pointer_acceleration_precision_mode) ||                 \
+                     DT_PROP(DT_DRV_INST(n), pointer_acceleration_precision_speed) <              \
+                         DT_PROP(DT_DRV_INST(n), pointer_acceleration_takeoff_speed),              \
+                 "Pointer acceleration precision speed must be below takeoff speed");           \
     BUILD_ASSERT(!DT_PROP(DT_DRV_INST(n), pointer_acceleration) ||                                \
                      DT_PROP(DT_DRV_INST(n), pointer_acceleration_scroll_layer) <                  \
                          ZMK_KEYMAP_LAYERS_LEN,                                                    \
@@ -828,6 +839,12 @@ static const struct sensor_driver_api pmw3610_driver_api = {
                     DT_PROP(DT_DRV_INST(n), pointer_acceleration_reference_interval_ms),           \
                 .idle_reset_ms =                                                                  \
                     DT_PROP(DT_DRV_INST(n), pointer_acceleration_idle_reset_ms),                   \
+                .precision_enabled =                                                              \
+                    DT_PROP(DT_DRV_INST(n), pointer_acceleration_precision_mode),                  \
+                .precision_gain_milli =                                                          \
+                    DT_PROP(DT_DRV_INST(n), pointer_acceleration_precision_gain_milli),            \
+                .precision_speed =                                                               \
+                    DT_PROP(DT_DRV_INST(n), pointer_acceleration_precision_speed),                 \
             },                                                                                     \
     };                                                                                             \
     DEVICE_DT_INST_DEFINE(n, pmw3610_init, NULL, &data##n, &config##n, POST_KERNEL,                \

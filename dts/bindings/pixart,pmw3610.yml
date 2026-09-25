@@ -59,6 +59,17 @@ properties:
     type: int
     default: 60
     description: Idle time that clears fractional remainder state
+  pointer-acceleration-precision-mode:
+    type: boolean
+    description: Enable a lower fixed gain that smoothly rejoins the standard curve
+  pointer-acceleration-precision-gain-milli:
+    type: int
+    default: 500
+    description: Precision-region gain in thousandths
+  pointer-acceleration-precision-speed:
+    type: int
+    default: 16
+    description: Highest normalized vector speed that uses only the precision gain
   pointer-acceleration-scroll-layer:
     type: int
     default: 2

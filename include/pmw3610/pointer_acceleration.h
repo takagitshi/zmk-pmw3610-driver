@@ -18,6 +18,9 @@ struct pmw3610_pointer_accel_curve {
     uint16_t max_gain_milli;
     uint16_t reference_interval_ms;
     uint16_t idle_reset_ms;
+    bool precision_enabled;
+    uint16_t precision_gain_milli;
+    uint16_t precision_speed;
 };
 
 struct pmw3610_pointer_accel_axis_state {
