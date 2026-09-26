@@ -422,11 +422,13 @@ static void pmw3610_async_init(struct k_work *work) {
     }
 }
 
+#if CONFIG_PMW3610_REPORT_INTERVAL_MIN == 0 || IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
 static bool pmw3610_acceleration_bypass_layer_active(const struct pixart_config *config) {
     return zmk_keymap_layer_active(config->acceleration_scroll_layer) ||
            zmk_keymap_layer_active(config->acceleration_gesture_layer) ||
            zmk_keymap_layer_active(config->acceleration_gesture_layer_2);
 }
+#endif
 
 static int pmw3610_report_data(const struct device *dev) {
     struct pixart_data *data = dev->data;
