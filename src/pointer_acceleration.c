@@ -66,8 +66,8 @@ static uint64_t integrated_gain_contribution_milli(uint32_t gain_span,
            ((uint64_t)gain_span * remainder + denominator / 2U) / denominator;
 }
 
-uint32_t pmw3610_pointer_accel_multiplier(const struct pmw3610_pointer_accel_curve *curve,
-                                          uint32_t speed) {
+static uint32_t standard_multiplier(const struct pmw3610_pointer_accel_curve *curve,
+                                    uint32_t speed) {
     if (speed == 0 || speed <= curve->takeoff_speed) {
         return (uint32_t)curve->base_gain_milli * 1000U;
     }
@@ -93,6 +93,37 @@ uint32_t pmw3610_pointer_accel_multiplier(const struct pmw3610_pointer_accel_cur
     const uint64_t multiplier = (output_milli * 1000U + speed / 2U) / speed;
     const uint32_t maximum = (uint32_t)curve->max_gain_milli * 1000U;
     return multiplier > maximum ? maximum : (uint32_t)multiplier;
+}
+
+static uint32_t smoothstep_q16(uint32_t offset, uint32_t width) {
+    const uint32_t one_q16 = UINT32_C(1) << 16;
+    const uint32_t progress_q16 = (uint32_t)(((uint64_t)offset << 16) / width);
+    const uint64_t squared_q32 = (uint64_t)progress_q16 * progress_q16;
+    const uint32_t slope_q16 = 3U * one_q16 - 2U * progress_q16;
+
+    return (uint32_t)((squared_q32 * slope_q16 + (UINT64_C(1) << 31)) >> 32);
+}
+
+uint32_t pmw3610_pointer_accel_multiplier(const struct pmw3610_pointer_accel_curve *curve,
+                                          uint32_t speed) {
+    const uint32_t standard = standard_multiplier(curve, speed);
+
+    if (!curve->precision_enabled || speed >= curve->takeoff_speed) {
+        return standard;
+    }
+
+    const uint32_t precision = (uint32_t)curve->precision_gain_milli * 1000U;
+    if (speed <= curve->precision_speed) {
+        return precision;
+    }
+
+    const uint32_t width = curve->takeoff_speed - curve->precision_speed;
+    const uint32_t offset = speed - curve->precision_speed;
+    const uint32_t blend_q16 = smoothstep_q16(offset, width);
+    const uint32_t delta = standard - precision;
+
+    return precision +
+           (uint32_t)(((uint64_t)delta * blend_q16 + (UINT64_C(1) << 15)) >> 16);
 }
 
 static void reset_axis(struct pmw3610_pointer_accel_axis_state *axis) {
