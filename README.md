@@ -12,8 +12,10 @@ failed non-blocking input reports retain their unsent distance for retry.
 
 Acceleration is disabled unless the sensor node contains
 `pointer-acceleration;`. Scroll and Gesture layer IDs are configurable bypasses,
-so those modes continue to receive raw motion. `force-awake` remains independent
-and is not enabled by this feature.
+so those modes continue to receive raw motion. A second Gesture layer can be set
+with `pointer-acceleration-gesture-layer-2`; when omitted, it defaults to the
+primary Gesture layer and preserves the existing behavior. `force-awake` remains
+independent and is not enabled by this feature.
 
 An optional `pointer-acceleration-precision-mode` adds a lower fixed gain below
 `pointer-acceleration-precision-speed`, then blends smoothly back to the original

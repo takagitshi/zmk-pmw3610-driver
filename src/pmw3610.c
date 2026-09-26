@@ -422,6 +422,12 @@ static void pmw3610_async_init(struct k_work *work) {
     }
 }
 
+static bool pmw3610_acceleration_bypass_layer_active(const struct pixart_config *config) {
+    return zmk_keymap_layer_active(config->acceleration_scroll_layer) ||
+           zmk_keymap_layer_active(config->acceleration_gesture_layer) ||
+           zmk_keymap_layer_active(config->acceleration_gesture_layer_2);
+}
+
 static int pmw3610_report_data(const struct device *dev) {
     struct pixart_data *data = dev->data;
     uint8_t buf[PMW3610_BURST_SIZE];
@@ -478,8 +484,7 @@ static int pmw3610_report_data(const struct device *dev) {
     const int64_t now_ms = k_uptime_get();
 
     if (IS_ENABLED(CONFIG_PMW3610_POINTER_ACCELERATION) && config->acceleration_enabled &&
-        !zmk_keymap_layer_active(config->acceleration_scroll_layer) &&
-        !zmk_keymap_layer_active(config->acceleration_gesture_layer)) {
+        !pmw3610_acceleration_bypass_layer_active(config)) {
         pmw3610_pointer_accel_apply_frame(&config->acceleration_curve, &data->acceleration,
                                           x, y, now_ms,
                                           config->acceleration_curve.reference_interval_ms,
@@ -504,8 +509,7 @@ static int pmw3610_report_data(const struct device *dev) {
 #if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
 static bool pmw3610_acceleration_bypassed(const struct pixart_config *config) {
 #if IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
-    return zmk_keymap_layer_active(config->acceleration_scroll_layer) ||
-           zmk_keymap_layer_active(config->acceleration_gesture_layer);
+    return pmw3610_acceleration_bypass_layer_active(config);
 #else
     ARG_UNUSED(config);
     return true;
@@ -770,6 +774,10 @@ static const struct sensor_driver_api pmw3610_driver_api = {
 #define PMW3610_SPI_MODE (SPI_OP_MODE_MASTER | SPI_WORD_SET(8) | SPI_MODE_CPOL | \
                         SPI_MODE_CPHA | SPI_TRANSFER_MSB)
 
+#define PMW3610_GESTURE_LAYER_2(n)                                                             \
+    DT_PROP_OR(DT_DRV_INST(n), pointer_acceleration_gesture_layer_2,                            \
+               DT_PROP(DT_DRV_INST(n), pointer_acceleration_gesture_layer))
+
 #define PMW3610_DEFINE(n)                                                                          \
     BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), pointer_acceleration_base_gain_milli) >= 500,             \
                  "Pointer acceleration base gain must be at least 0.5x");                         \
@@ -807,6 +815,9 @@ static const struct sensor_driver_api pmw3610_driver_api = {
                      DT_PROP(DT_DRV_INST(n), pointer_acceleration_gesture_layer) <                 \
                          ZMK_KEYMAP_LAYERS_LEN,                                                    \
                  "Pointer acceleration Gesture layer must exist");                              \
+    BUILD_ASSERT(!DT_PROP(DT_DRV_INST(n), pointer_acceleration) ||                                \
+                     PMW3610_GESTURE_LAYER_2(n) < ZMK_KEYMAP_LAYERS_LEN,                          \
+                 "Pointer acceleration Gesture layer 2 must exist");                            \
     static struct pixart_data data##n;                                                             \
     static const struct pixart_config config##n = {                                                \
 		.spi = SPI_DT_SPEC_INST_GET(n, PMW3610_SPI_MODE, 0),		                               \
@@ -825,6 +836,7 @@ static const struct sensor_driver_api pmw3610_driver_api = {
             DT_PROP(DT_DRV_INST(n), pointer_acceleration_scroll_layer),                            \
         .acceleration_gesture_layer =                                                             \
             DT_PROP(DT_DRV_INST(n), pointer_acceleration_gesture_layer),                           \
+        .acceleration_gesture_layer_2 = PMW3610_GESTURE_LAYER_2(n),                               \
         .acceleration_curve =                                                                     \
             {                                                                                      \
                 .base_gain_milli =                                                                \

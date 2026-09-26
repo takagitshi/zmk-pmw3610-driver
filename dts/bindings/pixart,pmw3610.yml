@@ -78,3 +78,8 @@ properties:
     type: int
     default: 3
     description: Layer on which acceleration is bypassed for raw gestures
+  pointer-acceleration-gesture-layer-2:
+    type: int
+    description: |
+      Optional second layer on which acceleration is bypassed for raw gestures.
+      When omitted, it defaults to pointer-acceleration-gesture-layer.
