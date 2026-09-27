@@ -72,7 +72,6 @@ properties:
     description: Highest normalized vector speed that uses only the precision gain
   pointer-acceleration-precision-full-speed:
     type: int
-    maximum: 65535
     description: |
       Optional normalized vector speed at which the precision transition ends
       and the standard acceleration curve resumes. When omitted, this uses
