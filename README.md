@@ -19,8 +19,12 @@ independent and is not enabled by this feature.
 
 An optional `pointer-acceleration-precision-mode` adds a lower fixed gain below
 `pointer-acceleration-precision-speed`, then blends smoothly back to the original
-acceleration curve at `pointer-acceleration-takeoff-speed`. At and above the
-takeoff speed, the original medium- and high-speed multipliers are
+acceleration curve at `pointer-acceleration-precision-full-speed`. The transition
+uses a 64-bit Q16 smoothstep with one final rounding step. The precision full
+speed must be above the precision speed and no higher than
+`pointer-acceleration-takeoff-speed`. When the optional full-speed property is
+omitted, the takeoff speed remains the transition endpoint, preserving the
+original precision curve. At and above the endpoint, the standard multiplier is
 returned exactly. Fractional motion continues to use the per-axis remainder
 tracking used by the standard acceleration path.
 

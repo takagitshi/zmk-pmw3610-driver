@@ -95,20 +95,13 @@ static uint32_t standard_multiplier(const struct pmw3610_pointer_accel_curve *cu
     return multiplier > maximum ? maximum : (uint32_t)multiplier;
 }
 
-static uint32_t smoothstep_q16(uint32_t offset, uint32_t width) {
-    const uint32_t one_q16 = UINT32_C(1) << 16;
-    const uint32_t progress_q16 = (uint32_t)(((uint64_t)offset << 16) / width);
-    const uint64_t squared_q32 = (uint64_t)progress_q16 * progress_q16;
-    const uint32_t slope_q16 = 3U * one_q16 - 2U * progress_q16;
-
-    return (uint32_t)((squared_q32 * slope_q16 + (UINT64_C(1) << 31)) >> 32);
-}
-
 uint32_t pmw3610_pointer_accel_multiplier(const struct pmw3610_pointer_accel_curve *curve,
                                           uint32_t speed) {
     const uint32_t standard = standard_multiplier(curve, speed);
+    const uint32_t precision_full_speed =
+        curve->precision_full_speed > 0 ? curve->precision_full_speed : curve->takeoff_speed;
 
-    if (!curve->precision_enabled || speed >= curve->takeoff_speed) {
+    if (!curve->precision_enabled || speed >= precision_full_speed) {
         return standard;
     }
 
@@ -117,9 +110,15 @@ uint32_t pmw3610_pointer_accel_multiplier(const struct pmw3610_pointer_accel_cur
         return precision;
     }
 
-    const uint32_t width = curve->takeoff_speed - curve->precision_speed;
+    const uint32_t width = precision_full_speed - curve->precision_speed;
     const uint32_t offset = speed - curve->precision_speed;
-    const uint32_t blend_q16 = smoothstep_q16(offset, width);
+    const uint32_t progress_q16 =
+        (uint32_t)(((uint64_t)offset << 16) / width);
+    const uint64_t smoothstep_numerator =
+        (uint64_t)progress_q16 * progress_q16 *
+        ((3U << 16) - 2U * progress_q16);
+    const uint32_t blend_q16 =
+        (uint32_t)((smoothstep_numerator + (UINT64_C(1) << 31)) >> 32);
     const uint32_t delta = standard - precision;
 
     return precision +

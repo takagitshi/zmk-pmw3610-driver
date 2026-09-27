@@ -6,6 +6,8 @@
 
 #define DT_DRV_COMPAT pixart_pmw3610
 
+#include <stdint.h>
+
 #include <zephyr/kernel.h>
 #include <zephyr/sys/byteorder.h>
 #include <zephyr/input/input.h>
@@ -780,6 +782,10 @@ static const struct sensor_driver_api pmw3610_driver_api = {
     DT_PROP_OR(DT_DRV_INST(n), pointer_acceleration_gesture_layer_2,                            \
                DT_PROP(DT_DRV_INST(n), pointer_acceleration_gesture_layer))
 
+#define PMW3610_PRECISION_FULL_SPEED(n)                                                        \
+    DT_PROP_OR(DT_DRV_INST(n), pointer_acceleration_precision_full_speed,                       \
+               DT_PROP(DT_DRV_INST(n), pointer_acceleration_takeoff_speed))
+
 #define PMW3610_DEFINE(n)                                                                          \
     BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), pointer_acceleration_base_gain_milli) >= 500,             \
                  "Pointer acceleration base gain must be at least 0.5x");                         \
@@ -807,8 +813,15 @@ static const struct sensor_driver_api pmw3610_driver_api = {
                  "Pointer acceleration precision gain must not exceed the base gain");          \
     BUILD_ASSERT(!DT_PROP(DT_DRV_INST(n), pointer_acceleration_precision_mode) ||                 \
                      DT_PROP(DT_DRV_INST(n), pointer_acceleration_precision_speed) <              \
+                         PMW3610_PRECISION_FULL_SPEED(n),                                         \
+                 "Pointer acceleration precision speed must be below full speed");              \
+    BUILD_ASSERT(!DT_PROP(DT_DRV_INST(n), pointer_acceleration_precision_mode) ||                 \
+                     PMW3610_PRECISION_FULL_SPEED(n) <=                                           \
                          DT_PROP(DT_DRV_INST(n), pointer_acceleration_takeoff_speed),              \
-                 "Pointer acceleration precision speed must be below takeoff speed");           \
+                 "Pointer acceleration precision must end at or below takeoff speed");          \
+    BUILD_ASSERT(!DT_PROP(DT_DRV_INST(n), pointer_acceleration_precision_mode) ||                 \
+                     PMW3610_PRECISION_FULL_SPEED(n) <= UINT16_MAX,                               \
+                 "Pointer acceleration precision full speed must fit in 16 bits");              \
     BUILD_ASSERT(!DT_PROP(DT_DRV_INST(n), pointer_acceleration) ||                                \
                      DT_PROP(DT_DRV_INST(n), pointer_acceleration_scroll_layer) <                  \
                          ZMK_KEYMAP_LAYERS_LEN,                                                    \
@@ -859,6 +872,7 @@ static const struct sensor_driver_api pmw3610_driver_api = {
                     DT_PROP(DT_DRV_INST(n), pointer_acceleration_precision_gain_milli),            \
                 .precision_speed =                                                               \
                     DT_PROP(DT_DRV_INST(n), pointer_acceleration_precision_speed),                 \
+                .precision_full_speed = PMW3610_PRECISION_FULL_SPEED(n),                          \
             },                                                                                     \
     };                                                                                             \
     DEVICE_DT_INST_DEFINE(n, pmw3610_init, NULL, &data##n, &config##n, POST_KERNEL,                \
