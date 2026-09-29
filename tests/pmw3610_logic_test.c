@@ -24,6 +24,20 @@ static void test_packed_motion_nibble_mapping_and_sign(void) {
     assert(delta.y == 0x123);
 }
 
+static void test_snipe_cpi_selection(void) {
+    assert(pmw3610_selected_cpi(false, false, 800, 400) == 800);
+    assert(pmw3610_selected_cpi(false, true, 800, 400) == 800);
+    assert(pmw3610_selected_cpi(true, false, 800, 400) == 800);
+    assert(pmw3610_selected_cpi(true, true, 800, 400) == 400);
+}
+
+static void test_read_retry_backoff(void) {
+    assert(pmw3610_next_retry_delay(1) == 2);
+    assert(pmw3610_next_retry_delay(2) == 4);
+    assert(pmw3610_next_retry_delay(32) == 64);
+    assert(pmw3610_next_retry_delay(64) == 64);
+}
+
 static void test_retry_semantics(void) {
     struct pmw3610_frame_retry retry = pmw3610_frame_retry_result(10, 20, -1, 0);
     assert(!retry.send_y && retry.x == 10 && retry.y == 20);
@@ -120,6 +134,8 @@ static void test_fixed_deadline_and_tail_flush(void) {
 int main(void) {
     test_delta12_boundaries();
     test_packed_motion_nibble_mapping_and_sign();
+    test_snipe_cpi_selection();
+    test_read_retry_backoff();
     test_retry_semantics();
     test_overflow_chunk_and_retry_order();
     test_repeated_failure_and_zero_sync_retry();

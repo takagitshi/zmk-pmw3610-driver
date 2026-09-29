@@ -24,13 +24,18 @@ struct pixart_data {
     struct pmw3610_report_accumulator report;
     struct pmw3610_pointer_accel_state acceleration;
     struct pmw3610_output_state output;
+    uint16_t                     current_cpi;
+    uint16_t                     normal_cpi;
     bool                         sw_smart_flag; // for pmw3610 smart algorithm
 
     struct gpio_callback         irq_gpio_cb; // motion pin irq callback
-    struct k_work                trigger_work; // realtrigger job
+    struct k_work_delayable      trigger_work; // motion read/retry job
 #if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
     struct k_work_delayable      report_work; // lossless rate-limited report job
 #endif
+    uint8_t                      read_retry_delay_ms;
+    bool                         read_error_active;
+    atomic_t                     motion_work_active;
 
     struct k_work_delayable      init_work; // the work structure for delayable init steps
     int                          async_init_step;
@@ -52,6 +57,9 @@ struct pixart_config {
     uint8_t y_input_code;
     bool force_awake;
     bool force_awake_4ms_mode;
+    bool snipe_enabled;
+    uint16_t snipe_cpi;
+    uint8_t snipe_layer;
     bool acceleration_enabled;
     uint8_t acceleration_scroll_layer;
     uint8_t acceleration_gesture_layer;

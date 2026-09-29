@@ -348,6 +348,7 @@ static int pmw3610_async_init_check_ob1(const struct device *dev) {
 static int pmw3610_async_init_configure(const struct device *dev) {
     int err = 0;
     const struct pixart_config *config = dev->config;
+    struct pixart_data *data = dev->data;
 
     // clear motion registers first (required in datasheet)
     for (uint8_t reg = 0x02; (reg <= 0x05) && !err; reg++) {
@@ -361,6 +362,10 @@ static int pmw3610_async_init_configure(const struct device *dev) {
 
     if (!err) {
         err = pmw3610_set_cpi(dev, config->cpi, config->swap_xy, config->inv_x, config->inv_y);
+        if (!err) {
+            data->current_cpi = config->cpi;
+            data->normal_cpi = config->cpi;
+        }
     }
 
     if (!err) {
@@ -424,13 +429,42 @@ static void pmw3610_async_init(struct k_work *work) {
     }
 }
 
+static bool pmw3610_snipe_layer_active(const struct pixart_config *config) {
+#if IS_ENABLED(CONFIG_ZMK_SPLIT) && !IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
+    ARG_UNUSED(config);
+    return false;
+#else
+    return config->snipe_enabled && zmk_keymap_layer_active(config->snipe_layer);
+#endif
+}
+
 #if CONFIG_PMW3610_REPORT_INTERVAL_MIN == 0 || IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
 static bool pmw3610_acceleration_bypass_layer_active(const struct pixart_config *config) {
-    return zmk_keymap_layer_active(config->acceleration_scroll_layer) ||
+    return pmw3610_snipe_layer_active(config) ||
+           zmk_keymap_layer_active(config->acceleration_scroll_layer) ||
            zmk_keymap_layer_active(config->acceleration_gesture_layer) ||
            zmk_keymap_layer_active(config->acceleration_gesture_layer_2);
 }
 #endif
+
+static int pmw3610_update_layer_cpi(const struct device *dev) {
+    const struct pixart_config *config = dev->config;
+    struct pixart_data *data = dev->data;
+    const bool snipe_active = pmw3610_snipe_layer_active(config);
+    const uint16_t cpi = pmw3610_selected_cpi(config->snipe_enabled, snipe_active,
+                                               data->normal_cpi, config->snipe_cpi);
+
+    if (data->current_cpi == cpi) {
+        return 0;
+    }
+
+    const int err =
+        pmw3610_set_cpi(dev, cpi, config->swap_xy, config->inv_x, config->inv_y);
+    if (!err) {
+        data->current_cpi = cpi;
+    }
+    return err;
+}
 
 static int pmw3610_report_data(const struct device *dev) {
     struct pixart_data *data = dev->data;
@@ -441,7 +475,13 @@ static int pmw3610_report_data(const struct device *dev) {
         return -EBUSY;
     }
 
-	int err = pmw3610_read(dev, PMW3610_REG_MOTION_BURST, buf, PMW3610_BURST_SIZE);
+    int err = pmw3610_update_layer_cpi(dev);
+    if (err) {
+        LOG_ERR("Failed to update layer CPI: %d", err);
+        return err;
+    }
+
+    err = pmw3610_read(dev, PMW3610_REG_MOTION_BURST, buf, PMW3610_BURST_SIZE);
     if (err) {
         return err;
     }
@@ -617,19 +657,87 @@ static void pmw3610_report_work_callback(struct k_work *work) {
 }
 #endif
 
+static int pmw3610_schedule_motion_retry(struct pixart_data *data, int err,
+                                         const char *operation) {
+    uint8_t delay_ms = data->read_retry_delay_ms;
+    if (!data->read_error_active) {
+        LOG_WRN("PMW3610 %s failed (%d); retrying with backoff", operation, err);
+        data->read_error_active = true;
+    }
+
+    int ret = k_work_reschedule(&data->trigger_work, K_MSEC(delay_ms));
+    if (ret < 0) {
+        LOG_ERR("Failed to schedule PMW3610 retry: %d", ret);
+        atomic_clear(&data->motion_work_active);
+        int enable_err = pmw3610_set_interrupt(data->dev, true);
+        if (enable_err) {
+            LOG_ERR("Failed to restore PMW3610 IRQ after retry scheduling error: %d",
+                    enable_err);
+        }
+        return ret;
+    }
+
+    data->read_retry_delay_ms = pmw3610_next_retry_delay(delay_ms);
+    return 0;
+}
+
 static void pmw3610_gpio_callback(const struct device *gpiob, struct gpio_callback *cb,
                                   uint32_t pins) {
     struct pixart_data *data = CONTAINER_OF(cb, struct pixart_data, irq_gpio_cb);
     const struct device *dev = data->dev;
-    pmw3610_set_interrupt(dev, false);
-    k_work_submit(&data->trigger_work);
+
+    if (!atomic_cas(&data->motion_work_active, 0, 1)) {
+        return;
+    }
+
+    int irq_err = pmw3610_set_interrupt(dev, false);
+    if (irq_err) {
+        pmw3610_schedule_motion_retry(data, irq_err, "IRQ disable");
+        return;
+    }
+
+    int ret = k_work_reschedule(&data->trigger_work, K_NO_WAIT);
+    if (ret < 0) {
+        LOG_ERR("Failed to schedule PMW3610 motion read: %d", ret);
+        atomic_clear(&data->motion_work_active);
+        int enable_err = pmw3610_set_interrupt(dev, true);
+        if (enable_err) {
+            LOG_ERR("Failed to restore PMW3610 IRQ after scheduling error: %d", enable_err);
+        }
+    }
 }
 
 static void pmw3610_work_callback(struct k_work *work) {
-    struct pixart_data *data = CONTAINER_OF(work, struct pixart_data, trigger_work);
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    struct pixart_data *data = CONTAINER_OF(dwork, struct pixart_data, trigger_work);
     const struct device *dev = data->dev;
-    pmw3610_report_data(dev);
-    pmw3610_set_interrupt(dev, true);
+
+    int err = pmw3610_set_interrupt(dev, false);
+    if (err) {
+        pmw3610_schedule_motion_retry(data, err, "IRQ disable");
+        return;
+    }
+
+    err = pmw3610_report_data(dev);
+    if (err) {
+        pmw3610_schedule_motion_retry(data, err, "motion read");
+        return;
+    }
+
+    atomic_clear(&data->motion_work_active);
+    err = pmw3610_set_interrupt(dev, true);
+    if (err) {
+        if (atomic_cas(&data->motion_work_active, 0, 1)) {
+            pmw3610_schedule_motion_retry(data, err, "IRQ enable");
+        }
+        return;
+    }
+
+    if (data->read_error_active) {
+        LOG_INF("PMW3610 motion path recovered");
+        data->read_error_active = false;
+    }
+    data->read_retry_delay_ms = PMW3610_READ_RETRY_MIN_MS;
 }
 
 static int pmw3610_init_irq(const struct device *dev) {
@@ -679,9 +787,14 @@ static int pmw3610_init(const struct device *dev) {
 
     // init smart algorithm flag;
     data->sw_smart_flag = false;
+    data->current_cpi = 0;
+    data->normal_cpi = config->cpi;
+    data->read_retry_delay_ms = PMW3610_READ_RETRY_MIN_MS;
+    data->read_error_active = false;
+    atomic_clear(&data->motion_work_active);
 
     // init trigger handler work
-    k_work_init(&data->trigger_work, pmw3610_work_callback);
+    k_work_init_delayable(&data->trigger_work, pmw3610_work_callback);
 #if CONFIG_PMW3610_REPORT_INTERVAL_MIN > 0
     k_work_init_delayable(&data->report_work, pmw3610_report_work_callback);
 #endif
@@ -723,6 +836,10 @@ static int pmw3610_attr_set(const struct device *dev, enum sensor_channel chan,
     case PMW3610_ATTR_CPI:
         err = pmw3610_set_cpi(dev, PMW3610_SVALUE_TO_CPI(*val),
                               config->swap_xy, config->inv_x, config->inv_y);
+        if (!err) {
+            data->current_cpi = PMW3610_SVALUE_TO_CPI(*val);
+            data->normal_cpi = data->current_cpi;
+        }
         break;
 
     case PMW3610_ATTR_RUN_DOWNSHIFT_TIME:
@@ -786,7 +903,18 @@ static const struct sensor_driver_api pmw3610_driver_api = {
     DT_PROP_OR(DT_DRV_INST(n), pointer_acceleration_precision_full_speed,                       \
                DT_PROP(DT_DRV_INST(n), pointer_acceleration_takeoff_speed))
 
+#define PMW3610_VALID_CPI(cpi) ((cpi) >= PMW3610_MIN_CPI && (cpi) <= PMW3610_MAX_CPI &&       \
+                                ((cpi) % 200) == 0)
+
 #define PMW3610_DEFINE(n)                                                                          \
+    BUILD_ASSERT(PMW3610_VALID_CPI(DT_PROP(DT_DRV_INST(n), cpi)),                                  \
+                 "PMW3610 CPI must be 200..3200 in 200-CPI steps");                              \
+    BUILD_ASSERT(!DT_PROP(DT_DRV_INST(n), snipe_mode) ||                                          \
+                     PMW3610_VALID_CPI(DT_PROP(DT_DRV_INST(n), snipe_cpi)),                        \
+                 "PMW3610 snipe CPI must be 200..3200 in 200-CPI steps");                       \
+    BUILD_ASSERT(!DT_PROP(DT_DRV_INST(n), snipe_mode) ||                                          \
+                     DT_PROP(DT_DRV_INST(n), snipe_layer) < ZMK_KEYMAP_LAYERS_LEN,                 \
+                 "PMW3610 snipe layer must exist");                                             \
     BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), pointer_acceleration_base_gain_milli) >= 500,             \
                  "Pointer acceleration base gain must be at least 0.5x");                         \
     BUILD_ASSERT(DT_PROP(DT_DRV_INST(n), pointer_acceleration_base_gain_milli) <= 1000,            \
@@ -846,6 +974,9 @@ static const struct sensor_driver_api pmw3610_driver_api = {
         .y_input_code = DT_PROP(DT_DRV_INST(n), y_input_code),                                     \
         .force_awake = DT_PROP(DT_DRV_INST(n), force_awake),                                       \
         .force_awake_4ms_mode = DT_PROP(DT_DRV_INST(n), force_awake_4ms_mode),                     \
+        .snipe_enabled = DT_PROP(DT_DRV_INST(n), snipe_mode),                                     \
+        .snipe_cpi = DT_PROP(DT_DRV_INST(n), snipe_cpi),                                         \
+        .snipe_layer = DT_PROP(DT_DRV_INST(n), snipe_layer),                                     \
         .acceleration_enabled = DT_PROP(DT_DRV_INST(n), pointer_acceleration),                     \
         .acceleration_scroll_layer =                                                              \
             DT_PROP(DT_DRV_INST(n), pointer_acceleration_scroll_layer),                            \

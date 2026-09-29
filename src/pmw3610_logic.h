@@ -35,6 +35,11 @@ struct pmw3610_motion_delta {
     int16_t y;
 };
 
+static inline uint16_t pmw3610_selected_cpi(bool snipe_enabled, bool snipe_layer_active,
+                                             uint16_t normal_cpi, uint16_t snipe_cpi) {
+    return snipe_enabled && snipe_layer_active ? snipe_cpi : normal_cpi;
+}
+
 struct pmw3610_output_state {
     int32_t pending_x;
     int32_t pending_y;

@@ -17,6 +17,11 @@ with `pointer-acceleration-gesture-layer-2`; when omitted, it defaults to the
 primary Gesture layer and preserves the existing behavior. `force-awake` remains
 independent and is not enabled by this feature.
 
+An optional `snipe-mode` switches the sensor to `snipe-cpi` while `snipe-layer`
+is active. The precision layer also bypasses pointer acceleration so its CPI is
+not multiplied by the normal pointer curve. CPI changes occur only when the
+selected layer mode changes.
+
 An optional `pointer-acceleration-precision-mode` adds a lower fixed gain below
 `pointer-acceleration-precision-speed`, then blends smoothly back to the original
 acceleration curve at `pointer-acceleration-precision-full-speed`. The transition

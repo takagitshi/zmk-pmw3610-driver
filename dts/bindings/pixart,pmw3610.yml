@@ -32,6 +32,17 @@ properties:
     type: boolean
   force-awake-4ms-mode:
     type: boolean
+  snipe-mode:
+    type: boolean
+    description: Enable a lower sensor CPI while the configured layer is active
+  snipe-cpi:
+    type: int
+    default: 400
+    description: "Precision CPI value (Range: 200 - 3200, Step: 200)"
+  snipe-layer:
+    type: int
+    default: 9
+    description: Layer that selects snipe CPI and bypasses pointer acceleration
   pointer-acceleration:
     type: boolean
     description: Enable same-frame pointer acceleration for this sensor instance
